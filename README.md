@@ -23,4 +23,4 @@ This Macro was developed and tested on a Webex Codec Pro with a Webex Room Navig
 
 ## Support
 
-Please reach out to the WXSD team at [wxsd@external.cisco.com](mailto:wxsd@external.cisco.com?subject=pwa-controls-macro).
+Please reach out to the WXSD team at [wxsd@external.cisco.com](mailto:wxsd@external.cisco.com?subject=quick-swap-macro).
