@@ -17,8 +17,8 @@ or implied.
  *                    	wimills@cisco.com
  *                    	Cisco Systems
  * 
- * Version: 1-0-0
- * Released: 08/23/22
+ * Version: 1-1-0
+ * Released: 10/20/22
  * 
  * This is a simple macro makes it easy to swap presentations between two displays
  * while out of call. It provides an single button only when the two presentation
@@ -28,35 +28,42 @@ or implied.
  ********************************************************/
 import xapi from 'xapi';
 
+/*********************************************************
+ * Configure the settings below
+**********************************************************/
+
 const config = {
-  defaultRoles: {     // Spectify the default Output Roles
-    1: 'Auto',        // Format eg. (Output Number): "RolesOutput = 1, Role = 'Auto'
-    2: 'Auto'         // <= In this case Output = 2, Role = 'Auto
-  },
-  swappedRoles: {     // Spectify the swapped Output Roles
-    1: 'Second',      // Same format as above with the defaults
-    2: 'First'        // In this example the outputs are flipped from how 'Auto' would work
-  },
-  buttonName: 'Quick Swap',   // This is the name of the button which is displayed
-  panelId: 'quick-swap'       // This is the name of the buttons panelId (not visible to user)
+  activePrompt: true,           // Display a prompt when two local shares are detected
+  promptDuration: 10,           // How long should the prompt display in seconds
+  buttonName: 'Quick Swap',     // This is the name of the button which is displayed
+  panelId: 'quick-swap',        // (not visible to user) Unique panelId for the button 
+  feedbackId: 'swap-feedback'   // (not visible to user) Unique feedbackId for the prompt 
 }
+
+/*********************************************************
+ * Main function to setup and add event listeners
+**********************************************************/
 
 function main() {
   createPanel();
-  presCallEvent();
+  presCallEvent('Initialize', 'Initialize');
   xapi.Event.UserInterface.Extensions.Panel.Clicked.on(monitorButton);
-  xapi.Event.PresentationPreviewStarted.on(presCallEvent);
-  xapi.Event.PresentationPreviewStopped.on(presCallEvent);
-  xapi.Event.CallSuccessful.on(presCallEvent);
-  xapi.Event.CallDisconnect.on(presCallEvent);
+  xapi.Event.UserInterface.Message.Prompt.Response.on(onPromptResponse);
+  xapi.Event.PresentationPreviewStarted.on(e => presCallEvent(e, 'Presentation'));
+  xapi.Event.PresentationPreviewStopped.on(e => presCallEvent(e, 'Presentation'));
+  xapi.Event.CallSuccessful.on(e => presCallEvent(e, "Call"));
+  xapi.Event.CallDisconnect.on(e => presCallEvent(e, 'Call'));
 }
 main();
+
+
+let swapping = 0;
 
 // Monitor for button presses
 function monitorButton(event) {
   if (event.PanelId === config.panelId) {
     console.log(`${config.buttonName} pressed`);
-    toggleRoles();
+    swapPresentations()
   }
 }
 
@@ -64,49 +71,62 @@ function monitorButton(event) {
 // This function will only show the panel when
 // There are 2 or more local presentations and
 // there are no active calls
-async function presCallEvent(event){
+async function presCallEvent(event, type){
+  console.log(`${type} Event`);
   console.log(event);
-  console.log('Preview Event');
   const presentations = await xapi.Status.Conference.Presentation.LocalInstance.get();
   const calls = await xapi.Status.Call.get()
   console.log('Number of presentations: ' +presentations.length);
   console.log('Number of calls: ' +calls.length);
-  if( presentations.length > 1 && calls.length < 1){
-    showPanel();
-  } else {
+  
+  if( presentations.length > 1 && calls.length < 1){ 
+    //console.log('Swapping is currently: ' + swapping + ' Local Source is: ' +event.LocalSource)
+    if(type == 'Presentation' && swapping == 0){
+      showButton()
+    } else if(swapping == event.LocalSource){
+      console.log('Swapping reset to: 0');
+      swapping = 0;
+    }
+  } else if (swapping == 0) {
     hidePanel();
   }
 }
 
-// Resets the monitor roles back to default
-function resetMonitorRoles(){
-  console.log('Resetting Monitor Roles');
-  for (const output in config.defaultRoles) {
-    console.log(`Setting [${output}] to ${config.defaultRoles[output]}`);
-    xapi.Config.Video.Output.Connector[output].MonitorRole.set(config.defaultRoles[output]);
+// This function with swap the order of local presentations
+async function swapPresentations() {
+  const pres = await xapi.Status.Conference.Presentation.LocalInstance.get();
+  if(pres.length!=2){
+    console.log(`Incorrect number of presentations to perform a swap, count: ${pres.length}, requires: 2`);
+    return;
   }
-}
+  console.log(`Swapping Presentations, sources ${pres[0].Source} with ${pres[1].Source}`);
+  swapping = pres[0].Source;
 
-// Toggle the current monitor roles between defaults and swapped values
-async function toggleRoles() {
-  console.log('Toggling Monitor Roles')
-  for (const output in config.defaultRoles) {
-    const current = await xapi.Config.Video.Output.Connector[output].MonitorRole.get();
-    if(config.defaultRoles[output] === current) {
-      console.log(`Setting [${output}] to ${config.swappedRoles[output]}`);
-      xapi.Config.Video.Output.Connector[output].MonitorRole.set(config.swappedRoles[output]);
-    } else {
-      console.log(`Setting [${output}] to ${config.defaultRoles[output]}`);
-      xapi.Config.Video.Output.Connector[output].MonitorRole.set(config.defaultRoles[output]);
-    }
-  }
+  console.log('Swapping set to: ' + swapping)
+  await xapi.Command.Presentation.Stop({
+      Instance: pres[1].id
+    });
+  await xapi.Command.Presentation.Start({
+      Instance: pres[0].id,
+      PresentationSource: pres[1].Source,
+      SendingMode: pres[1].SendingMode });
+  await xapi.Command.Presentation.Start({
+      Instance: pres[1].id,
+      PresentationSource: pres[0].Source,
+      SendingMode: pres[0].SendingMode
+      });
 }
 
 // Show the panel
-function showPanel() {
+function showButton() {
   console.log('Showing Panel');
   xapi.Command.UserInterface.Extensions.Panel.Update(
     { PanelId: config.panelId, Visibility: 'Auto' });
+
+  // If enabled, also display the feedback prompt
+  if(config.activePrompt){
+    promptPanel();
+  }
 }
 
 // Hide the panel and reset monitor roles
@@ -114,7 +134,32 @@ function hidePanel() {
   console.log('Hiding Panel');
   xapi.Command.UserInterface.Extensions.Panel.Update(
     { PanelId: config.panelId, Visibility: 'Hidden' });
-  resetMonitorRoles();
+}
+
+function promptPanel(){
+  xapi.Command.UserInterface.Message.Prompt.Display({
+      Duration: config.promptDuration,
+      FeedbackId: config.feedbackId,
+      "Option.1": 'Yes',
+      "Option.2": 'No',
+      Text: 'Two presentations detected, do you want to swap the display order', 
+      Title: config.buttonName
+    });
+}
+
+function onPromptResponse(e) {
+  if (e.FeedbackId !== config.feedbackId) return;
+  switch (e.OptionId){
+    case '1':
+      console.log('User requested to swap from prompt');
+      swapPresentations();
+      break;
+    case '2':
+      console.log('User requested not to swap from prompt');
+      break;
+  };
+  xapi.Command.UserInterface.Message.Prompt.Clear(
+      { FeedbackId: config.feedbackId });
 }
 
 // Here we create the Button UI
@@ -124,7 +169,7 @@ function createPanel() {
     <Version>1.9</Version>
     <Panel>
       <Type>Home</Type>
-      <Location>HomeScreen</Location>
+      <Location>HomeScreenAndCallControls</Location>
       <Icon>Input</Icon>
       <Color>#FC5143</Color>
       <Name>${config.buttonName}</Name>
